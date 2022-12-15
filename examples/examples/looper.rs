@@ -15,6 +15,9 @@ use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 fn android_main(app: AndroidApp) {
     android_logger::init_once(android_logger::Config::default().with_min_level(log::Level::Info));
 
+    // First free number after ndk_glue::NDK_GLUE_LOOPER_INPUT_QUEUE_IDENT. This might be fragile.
+    const CUSTOM_EVENT_IDENT: i32 = 20;
+
     // Retrieve the Looper that android-activity created for us on the current thread.
     // android-activity uses this to block on events and poll file descriptors with a single mechanism.
     let looper =
@@ -31,6 +34,18 @@ fn android_main(app: AndroidApp) {
     let custom_event_pipe = create_pipe();
     let custom_callback_pipe = create_pipe();
 
+    // Attach the reading end of the pipe to the looper, so that it wakes up
+    // whenever data is available for reading (FdEvent::INPUT)
+    looper
+        .as_foreign()
+        .add_fd(
+            custom_event_pipe[0],
+            CUSTOM_EVENT_IDENT,
+            FdEvent::INPUT,
+            std::ptr::null_mut(),
+        )
+        .expect("Failed to add file descriptor to Looper");
+
     // Attach the reading end of a pipe to a callback, too
     looper
         .as_foreign()
@@ -40,7 +55,7 @@ fn android_main(app: AndroidApp) {
                 unsafe { libc::read(fd, &mut recv as *mut _ as *mut _, U32_SIZE) } as usize,
                 U32_SIZE
             );
-            println!("Read custom event from pipe, in callback: {}", recv);
+            info!("Read custom event from pipe, in callback: {}", recv);
             // Detach this handler by returning `false` once the count reaches 5
             recv < 5
         })
@@ -56,7 +71,7 @@ fn android_main(app: AndroidApp) {
                 U32_SIZE as isize
             );
             assert_eq!(
-                unsafe { libc::write(custom_callback_pipe[1], i_addr, U32_SIZE,) },
+                unsafe { libc::write(custom_callback_pipe[1], i_addr, U32_SIZE) },
                 U32_SIZE as isize
             );
         }
